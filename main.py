@@ -407,16 +407,23 @@ def handle_report_text(message, text):
     send_message(chat_id, report, msg_id)
 
 def handle_message(message):
-    if not is_allowed(message):
-        return
     text = (message.get("text") or "").strip()
     if not text:
         return
-    chat_id = message["chat"]["id"]
+    chat = message.get("chat", {})
+    chat_id = chat.get("id", 0)
+    chat_type = chat.get("type", "unknown")
     msg_id = message.get("message_id")
     user_id = message.get("from", {}).get("id", 0)
-    state = user_state[user_id]
+    logging.info("Incoming message chat_id=%s chat_type=%s user_id=%s text=%s", chat_id, chat_type, user_id, text[:80])
     command, args = command_and_args(text)
+    if command == "/id":
+        send_message(chat_id, f"Chat ID: {chat_id}\nChat type: {chat_type}\nAllowed chat ID: {ALLOWED_CHAT_ID}", msg_id)
+        return
+    if not is_allowed(message):
+        logging.info("Ignored unauthorized chat_id=%s chat_type=%s allowed_chat_id=%s", chat_id, chat_type, ALLOWED_CHAT_ID)
+        return
+    state = user_state[user_id]
     if command == "/help":
         send_message(chat_id, HELP_TR, msg_id)
     elif command == "/cancel":
