@@ -39,6 +39,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 REPORT_MODE = "report_mode"
 REPORT_DRAFT = "report_draft"
+APP_VERSION = "2026-06-17-report-inline-retry"
 LIMIT_MESSAGE = "bugünlük bukadar sonra tekrar dene (limit bitti)"
 REPORT_REVIEW_WARNING = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
 
@@ -109,8 +110,8 @@ HELP_TR = """
 /chat <mesaj>
 Siber güvenlik, bug bounty, güvenli kod ve savunma odaklı sorulara cevap verir.
 
-/report
-Bug bounty raporu oluşturma modunu başlatır. Zorunlu bilgiler: Açık türü, etkilenen URL veya endpoint, nasıl tetiklendiği, etki/risk ve severity.
+/report <sorunu anlat>
+Bug bounty raporu üretir. Zorunlu bilgiler: Açık türü, etkilenen URL veya endpoint, nasıl tetiklendiği, etki/risk ve severity.
 
 /exitreport
 Sadece rapor modundan çıkar.
@@ -125,7 +126,10 @@ Bot sadece yetkili 0xVault grup içinde çalışır ve konu dışı soruları ya
 """.strip()
 
 REPORT_INTRO_TR = """
-Rapor modunu başlattım. Bulguyu tek mesajda yaz.
+Kullanım: /report <sorunu anlat>
+
+Örnek:
+/report Açık türü: IDOR. Etkilenen URL: https://example.com/api/users/123/invoices. Nasıl tetikleniyor: user_id 123 yerine 124 yapılıp GET request gönderiliyor. Etki/Risk: Yetkisiz kullanıcı başka müşterinin fatura verilerini görebiliyor. Severity: High
 
 Zorunlu bilgiler:
 Açık türü (XSS, SQLi, IDOR...)
@@ -133,8 +137,6 @@ Etkilenen URL veya endpoint
 Nasıl tetikleniyor
 Etki/Risk (ne yapılabilir)
 Severity (Low/Medium/High/Critical)
-
-Çıkmak için /exitreport, her şeyi durdurmak için /cancel yaz.
 """.strip()
 
 user_state = defaultdict(dict)
@@ -452,9 +454,12 @@ def handle_message(message):
         clear_user(user_id)
         send_message(chat_id, "İptal edildi. Aktif işlem durduruldu.", msg_id)
     elif command == "/report":
-        state[REPORT_MODE] = True
-        state[REPORT_DRAFT] = ""
-        send_message(chat_id, REPORT_INTRO_TR, msg_id)
+        if not args:
+            send_message(chat_id, REPORT_INTRO_TR, msg_id)
+            return
+        state.pop(REPORT_MODE, None)
+        state.pop(REPORT_DRAFT, None)
+        handle_report_text(message, args)
     elif command == "/exitreport":
         if state.get(REPORT_MODE):
             state.pop(REPORT_MODE, None)
@@ -472,14 +477,11 @@ def handle_message(message):
 
 def poll_loop():
     offset = 0
-    while True:
-        try:
-            telegram("deleteWebhook", {"drop_pending_updates": True}, retries=5)
-            break
-        except Exception as exc:
-            logging.warning("deleteWebhook failed, retrying without crashing: %s", exc)
-            time.sleep(10)
-    logging.info("0xVault bot started")
+    try:
+        telegram("deleteWebhook", {"drop_pending_updates": True}, retries=2)
+    except Exception as exc:
+        logging.warning("deleteWebhook failed, continuing polling loop without crashing: %s", exc)
+    logging.info("0xVault bot started version=%s", APP_VERSION)
     while True:
         try:
             data = telegram("getUpdates", {"offset": offset, "timeout": 50, "allowed_updates": ["message"]})
