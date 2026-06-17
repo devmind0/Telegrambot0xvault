@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env.*
+
+render_env_import.txt
