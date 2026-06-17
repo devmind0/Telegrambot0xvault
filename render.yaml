@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: oxvault-telegram-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ALLOWED_CHAT_ID
+        value: "-3811673849"
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_AUTH_MODE
+        value: key
+      - key: CHAT_RATE_LIMIT_COUNT
+        value: "8"
+      - key: CHAT_RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: REPORT_RATE_LIMIT_COUNT
+        value: "5"
+      - key: REPORT_RATE_LIMIT_WINDOW_SECONDS
+        value: "300"
+      - key: AI_TIMEOUT_SECONDS
+        value: "30"
+      - key: LOG_LEVEL
+        value: INFO
