@@ -40,6 +40,7 @@ BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 REPORT_MODE = "report_mode"
 REPORT_DRAFT = "report_draft"
 LIMIT_MESSAGE = "bugünlük bukadar sonra tekrar dene (limit bitti)"
+REPORT_REVIEW_WARNING = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
 
@@ -98,6 +99,8 @@ Etki/Risk:
 Kanıt/PoC:
 Önerilen Çözüm:
 Doğrulama Notları:
+En sonda ayrı bir satır olarak şu uyarıyı birebir ekle:
+*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*
 """.strip()
 
 HELP_TR = """
@@ -312,8 +315,17 @@ def fallback_report(text, analysis):
         f"Etki/Risk: Bu zafiyet, bildirilen senaryoya göre yetkisiz işlem, veri erişimi veya güvenlik kontrolü atlatma riski doğurabilir.\n\n"
         f"Kanıt/PoC: {text.strip()}\n\n"
         f"Önerilen Çözüm: Girdi doğrulama, yetkilendirme kontrolleri, güvenli varsayılanlar, kapsamlı loglama ve regresyon testleri uygulanmalıdır.\n\n"
-        f"Doğrulama Notları: Düzeltme sonrası aynı endpoint üzerinde yetkili ve yetkisiz kullanıcı senaryoları ayrı ayrı test edilmelidir."
+        f"Doğrulama Notları: Düzeltme sonrası aynı endpoint üzerinde yetkili ve yetkisiz kullanıcı senaryoları ayrı ayrı test edilmelidir.\n\n"
+        f"{REPORT_REVIEW_WARNING}"
     )
+
+
+def ensure_report_warning(report):
+    report = report.strip()
+    if REPORT_REVIEW_WARNING in report:
+        return report
+    return report + "\n\n" + REPORT_REVIEW_WARNING
+
 
 def generate_ai(system_prompt, user_prompt, temperature=0.35):
     if not GEMINI_API_KEY:
@@ -411,6 +423,7 @@ def handle_report_text(message, text):
     except Exception as exc:
         logging.warning("AI report error: %s", exc)
         report = fallback_report(combined, analysis)
+    report = ensure_report_warning(report)
     state.pop(REPORT_MODE, None)
     state.pop(REPORT_DRAFT, None)
     send_message(chat_id, report, msg_id)
