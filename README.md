@@ -1,16 +1,21 @@
+---
+title: 0xVault Telegram Bot
+emoji: 🛡️
+colorFrom: gray
+colorTo: blue
+sdk: docker
+pinned: false
+---
+
 0xVault Telegram Bot
 
-Render kurulumu
+Hugging Face Spaces Docker deployment.
 
-Build Command:
-pip install -r requirements.txt
-
-Start Command:
-python main.py
-
-Environment Variables:
+Required Space Secrets:
 TELEGRAM_BOT_TOKEN
 GEMINI_API_KEY
+
+Required Space Variables:
 ALLOWED_CHAT_ID=-3811673849
 GEMINI_MODEL=gemini-2.5-flash
 GEMINI_AUTH_MODE=key
@@ -20,14 +25,15 @@ REPORT_RATE_LIMIT_COUNT=5
 REPORT_RATE_LIMIT_WINDOW_SECONDS=300
 AI_TIMEOUT_SECONDS=30
 LOG_LEVEL=INFO
+PORT=7860
 
-Health check:
+Health endpoints:
 /
 /health
 
-Telegram komutları:
+Telegram commands:
 /help
-/chat <mesaj>
+/chat <message>
 /report
 /exitreport
 /cancel
