@@ -183,11 +183,20 @@ def http_json(url, payload=None, headers=None, timeout=35):
             data = {"raw": body}
         return error.code, data
 
-def telegram(method, payload=None):
-    status, data = http_json(f"{BASE_URL}/{method}", payload, timeout=60)
-    if status >= 400 or not data.get("ok", False):
-        logging.warning("Telegram API error %s %s", status, data)
-    return data
+def telegram(method, payload=None, retries=3):
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            status, data = http_json(f"{BASE_URL}/{method}", payload, timeout=60)
+            if status >= 400 or not data.get("ok", False):
+                logging.warning("Telegram API error %s %s", status, data)
+            return data
+        except Exception as exc:
+            last_error = exc
+            wait_seconds = min(10, attempt * 2)
+            logging.warning("Telegram API temporary error method=%s attempt=%s/%s error=%s", method, attempt, retries, exc)
+            time.sleep(wait_seconds)
+    raise RuntimeError(f"Telegram API failed after retries: {last_error}")
 
 def send_message(chat_id, text, reply_to=None):
     text = text.strip() or "Tamam."
@@ -450,7 +459,13 @@ def handle_message(message):
 
 def poll_loop():
     offset = 0
-    telegram("deleteWebhook", {"drop_pending_updates": True})
+    while True:
+        try:
+            telegram("deleteWebhook", {"drop_pending_updates": True}, retries=5)
+            break
+        except Exception as exc:
+            logging.warning("deleteWebhook failed, retrying without crashing: %s", exc)
+            time.sleep(10)
     logging.info("0xVault bot started")
     while True:
         try:
