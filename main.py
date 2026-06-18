@@ -44,7 +44,7 @@ REPORT_AWAITING_LANGUAGE = "report_awaiting_language"
 REPORT_PENDING_TEXT = "report_pending_text"
 REPORT_PENDING_ANALYSIS = "report_pending_analysis"
 REPORT_PENDING_IMAGE_NOTE = "report_pending_image_note"
-APP_VERSION = "2026-06-18-photo-report-language"
+APP_VERSION = "2026-06-18-command-gated-images-language-fix"
 LIMIT_MESSAGE = "bugünlük bukadar sonra tekrar dene (limit bitti)"
 REPORT_REVIEW_WARNING_TR = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
 REPORT_REVIEW_WARNING_EN = "*Do not trust the bot blindly; it can make mistakes. Review the final report yourself.*"
@@ -80,7 +80,8 @@ IMPACT_WORDS = (
 CYBER_SYSTEM_PROMPT = """
 Sen 0xVault ekibi için özel üretilmiş profesyonel bir siber güvenlik asistanısın.
 Kimliğin: 0xVault Cyber Security Bot.
-Kullanıcı hangi dilde yazarsa aynı dilde cevap ver. İngilizce yazarsa İngilizce, Türkçe yazarsa Türkçe, başka dilde yazarsa o dile uyum sağla.
+Kullanıcı hangi dilde yazarsa cevabın tamamen aynı dilde olsun. İngilizce yazarsa tamamen İngilizce, Türkçe yazarsa tamamen Türkçe, başka dilde yazarsa o dile uyum sağla.
+Dilleri karıştırma. Kullanıcı istemedikçe Türkçe-İngilizce karışık cevap verme.
 Bu dil uyumu /chat, görsel yorumlama, hata analizi, yardım ve rapor dışındaki tüm doğal cevaplarda geçerlidir.
 Sadece siber güvenlik, bug bounty, güvenli kod, savunma, analiz, raporlama ve 0xVault ekibiyle ilgili makul sohbetlere cevap ver.
 Konu dışı sorularda kibarca bu botun sadece 0xVault siber güvenlik görevleri için çalıştığını söyle.
@@ -129,7 +130,7 @@ Sadece rapor modundan çıkar.
 Aktif işlemleri ve geçici durumu iptal eder.
 
 Fotoğraf desteği
-/chat açıklamasıyla veya /report açıklamasıyla görsel gönderebilirsin. Bot görseli yorumlayıp yanıta dahil eder.
+Sadece /chat açıklamasıyla veya /report açıklamasıyla görsel gönderebilirsin. Başında /chat veya /report yoksa bot görseli yok sayar.
 
 /help
 Bu yardım ekranını gösterir.
@@ -484,9 +485,9 @@ def handle_chat(message, args):
         image = download_telegram_photo(message) if has_photo else None
         prompt = args or "Bu görseli siber güvenlik açısından yorumla. Ne görüyorsun, risk var mı, nasıl çözülür?"
         if has_photo:
-            prompt = f"Kullanıcı mesajı:\n{prompt}\n\nGörseli de inceleyerek cevap ver."
+            prompt = f"Kullanıcı mesajı:\n{prompt}\n\nKullanıcının dilini algıla ve cevabı tamamen aynı dilde ver. Görseli de inceleyerek cevap ver."
         else:
-            prompt = f"Kullanıcı mesajı:\n{prompt}"
+            prompt = f"Kullanıcı mesajı:\n{prompt}\n\nKullanıcının dilini algıla ve cevabı tamamen aynı dilde ver. Dilleri karıştırma."
         answer = generate_ai(CYBER_SYSTEM_PROMPT, prompt, 0.3, image=image)
     except AiLimitError:
         answer = LIMIT_MESSAGE
@@ -609,8 +610,6 @@ def handle_message(message):
             send_message(chat_id, "Rapor modundasın. Çıkmak için /exitreport, tamamen iptal etmek için /cancel kullan.", msg_id)
         else:
             handle_report_text(message, text)
-    elif has_photo:
-        handle_chat(message, args or text)
 
 def poll_loop():
     offset = 0

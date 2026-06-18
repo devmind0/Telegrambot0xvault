@@ -23,7 +23,7 @@ _startup_error = ""
 def ascii_json(data):
     return Response(
         content=json.dumps(data, ensure_ascii=True, separators=(",", ":")),
-        media_type="application/json",
+        media_type="application/json; charset=utf-8",
     )
 
 
@@ -155,7 +155,7 @@ def quick_process(update):
     if command == "/chat" and not message.get("photo"):
         return capture_first_response(bot, lambda: bot.handle_chat(message, args))
 
-    if command == "/chat" or message.get("photo") or command == "/report":
+    if command in {"/chat", "/report"}:
         Thread(target=bot.handle_message, args=(message,), daemon=True).start()
         return webhook_method(chat_id, processing_message(text), msg_id)
 
@@ -179,7 +179,7 @@ def root():
         version = getattr(_bot_module, "APP_VERSION", "unknown")
     return {
         "status": "ok" if not _startup_error else "error",
-        "mode": "telegram_webhook_ascii_sync",
+        "mode": "telegram_webhook_command_gated_ascii", 
         "service": "0xVault Telegram Bot",
         "version": version,
         "error": _startup_error,
