@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -42,7 +43,8 @@ REPORT_DRAFT = "report_draft"
 REPORT_AWAITING_LANGUAGE = "report_awaiting_language"
 REPORT_PENDING_TEXT = "report_pending_text"
 REPORT_PENDING_ANALYSIS = "report_pending_analysis"
-APP_VERSION = "2026-06-18-report-language-choice"
+REPORT_PENDING_IMAGE_NOTE = "report_pending_image_note"
+APP_VERSION = "2026-06-18-photo-report-language"
 LIMIT_MESSAGE = "bugünlük bukadar sonra tekrar dene (limit bitti)"
 REPORT_REVIEW_WARNING_TR = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
 REPORT_REVIEW_WARNING_EN = "*Do not trust the bot blindly; it can make mistakes. Review the final report yourself.*"
@@ -124,6 +126,9 @@ Sadece rapor modundan çıkar.
 
 /cancel
 Aktif işlemleri ve geçici durumu iptal eder.
+
+Fotoğraf desteği
+/chat açıklamasıyla veya /report açıklamasıyla görsel gönderebilirsin. Bot görseli yorumlayıp yanıta dahil eder.
 
 /help
 Bu yardım ekranını gösterir.
@@ -209,6 +214,54 @@ def telegram(method, payload=None, retries=3):
             time.sleep(wait_seconds)
     logging.error("Telegram API failed after retries method=%s error=%s", method, last_error)
     return {"ok": False, "result": [], "error": str(last_error)}
+
+
+def http_binary(url, timeout=60):
+    request = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        content_type = response.headers.get("Content-Type", "application/octet-stream").split(";", 1)[0].strip()
+        return response.read(), content_type
+
+
+def best_photo_file_id(message):
+    photos = message.get("photo") or []
+    if not photos:
+        return None
+    best = max(photos, key=lambda item: item.get("file_size", 0) or (item.get("width", 0) * item.get("height", 0)))
+    return best.get("file_id")
+
+
+def download_telegram_photo(message):
+    file_id = best_photo_file_id(message)
+    if not file_id:
+        return None
+    file_info = telegram("getFile", {"file_id": file_id}, retries=3)
+    file_path = (file_info.get("result") or {}).get("file_path")
+    if not file_path:
+        raise AiServiceError("Telegram görsel dosya yolu alınamadı")
+    url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+    data, mime_type = http_binary(url, timeout=60)
+    if not mime_type.startswith("image/"):
+        mime_type = "image/jpeg"
+    return {"data": data, "mime_type": mime_type}
+
+
+def image_note_for_message(message, purpose_text):
+    if not message.get("photo"):
+        return ""
+    try:
+        image = download_telegram_photo(message)
+        if not image:
+            return ""
+        prompt = (
+            "Bu görseli 0xVault siber güvenlik bağlamında incele. "
+            "Ekrandaki metinleri, hata mesajlarını, URL/endpoint izlerini, güvenlik bulgusuna dair kanıtları ve önemli ayrıntıları kısa ama net özetle. "
+            f"Bağlam: {purpose_text}"
+        )
+        return generate_ai(CYBER_SYSTEM_PROMPT, prompt, temperature=0.2, image=image)
+    except Exception as exc:
+        logging.warning("Image analysis failed: %s", exc)
+        return "Görsel alındı fakat teknik bağlantı nedeniyle içerik analizi yapılamadı. Kullanıcı açıklaması esas alınmalıdır."
 
 def send_message(chat_id, text, reply_to=None):
     text = text.strip() or "Tamam."
@@ -361,7 +414,7 @@ def ensure_report_warning(report, language="tr"):
     return report + "\n\n" + warning
 
 
-def generate_ai(system_prompt, user_prompt, temperature=0.35):
+def generate_ai(system_prompt, user_prompt, temperature=0.35, image=None):
     if not GEMINI_API_KEY:
         raise AiServiceError("AI key eksik")
     base = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
@@ -371,9 +424,17 @@ def generate_ai(system_prompt, user_prompt, temperature=0.35):
         headers["Authorization"] = f"Bearer {GEMINI_API_KEY}"
     else:
         url = base + "?" + urllib.parse.urlencode({"key": GEMINI_API_KEY})
+    user_parts = [{"text": user_prompt}]
+    if image:
+        user_parts.append({
+            "inline_data": {
+                "mime_type": image.get("mime_type", "image/jpeg"),
+                "data": base64.b64encode(image["data"]).decode("ascii"),
+            }
+        })
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "contents": [{"role": "user", "parts": user_parts}],
         "generationConfig": {"temperature": temperature, "topP": 0.9, "maxOutputTokens": 2048},
     }
     status, data = http_json(url, payload, headers=headers, timeout=AI_TIMEOUT_SECONDS)
@@ -407,23 +468,30 @@ def handle_chat(message, args):
     msg_id = message.get("message_id")
     user_id = message.get("from", {}).get("id", 0)
     state = user_state[user_id]
-    if state.get(REPORT_MODE):
-        send_message(chat_id, "Şu an rapor modundasın. Sohbete dönmek için önce /exitreport veya /cancel yaz.", msg_id)
+    if state.get(REPORT_AWAITING_LANGUAGE):
+        send_message(chat_id, "Şu an rapor dil seçimi bekleniyor, diğer komutlar çalışamaz. /tr, /en, /cancel veya /exitreport kodlarını dene.", msg_id)
         return
     allowed, retry = allow_rate(user_id, "chat", CHAT_RATE_LIMIT_COUNT, CHAT_RATE_LIMIT_WINDOW_SECONDS)
     if not allowed:
         send_message(chat_id, f"Rate limit aşıldı. {retry} saniye sonra tekrar dene.", msg_id)
         return
-    if not args:
-        send_message(chat_id, "Mesajını /chat komutundan sonra yaz. Örnek: /chat IDOR nasıl raporlanır?", msg_id)
+    has_photo = bool(message.get("photo"))
+    if not args and not has_photo:
+        send_message(chat_id, "Mesajını /chat komutundan sonra yaz veya fotoğraf ekle. Örnek: /chat bu ekran hatası nedir?", msg_id)
         return
     try:
-        answer = generate_ai(CYBER_SYSTEM_PROMPT, f"Kullanıcı mesajı:\n{args}", 0.3)
+        image = download_telegram_photo(message) if has_photo else None
+        prompt = args or "Bu görseli siber güvenlik açısından yorumla. Ne görüyorsun, risk var mı, nasıl çözülür?"
+        if has_photo:
+            prompt = f"Kullanıcı mesajı:\n{prompt}\n\nGörseli de inceleyerek cevap ver."
+        else:
+            prompt = f"Kullanıcı mesajı:\n{prompt}"
+        answer = generate_ai(CYBER_SYSTEM_PROMPT, prompt, 0.3, image=image)
     except AiLimitError:
         answer = LIMIT_MESSAGE
     except Exception as exc:
         logging.warning("AI chat error: %s", exc)
-        answer = "AI servisi şu an yanıt veremiyor. Biraz sonra tekrar dene."
+        answer = "AI servisi veya görsel analizi şu an yanıt veremiyor. Biraz sonra tekrar dene."
     send_message(chat_id, answer, msg_id)
 
 def handle_report_text(message, text):
@@ -436,12 +504,16 @@ def handle_report_text(message, text):
         return
     state = user_state[user_id]
     combined = text.strip()
+    image_note = image_note_for_message(message, combined) if message.get("photo") else ""
+    if image_note:
+        combined = combined + "\n\nGörsel analizi:\n" + image_note
     analysis = analyze_report(combined)
     if not analysis["complete"]:
         send_message(chat_id, missing_message(analysis["missing"]), msg_id)
         return
     state[REPORT_PENDING_TEXT] = combined
     state[REPORT_PENDING_ANALYSIS] = analysis
+    state[REPORT_PENDING_IMAGE_NOTE] = image_note
     state[REPORT_AWAITING_LANGUAGE] = True
     send_message(chat_id, report_language_question(), msg_id)
 
@@ -479,26 +551,28 @@ def handle_report_language(message, language):
     state.pop(REPORT_AWAITING_LANGUAGE, None)
     state.pop(REPORT_PENDING_TEXT, None)
     state.pop(REPORT_PENDING_ANALYSIS, None)
+    state.pop(REPORT_PENDING_IMAGE_NOTE, None)
     send_message(chat_id, report, msg_id)
 
 def handle_message(message):
-    text = (message.get("text") or "").strip()
-    if not text:
+    text = (message.get("text") or message.get("caption") or "").strip()
+    has_photo = bool(message.get("photo"))
+    if not text and not has_photo:
         return
     chat = message.get("chat", {})
     chat_id = chat.get("id", 0)
     chat_type = chat.get("type", "unknown")
     msg_id = message.get("message_id")
     user_id = message.get("from", {}).get("id", 0)
-    logging.info("Incoming message chat_id=%s chat_type=%s user_id=%s text=%s", chat_id, chat_type, user_id, text[:80])
+    logging.info("Incoming message chat_id=%s chat_type=%s user_id=%s has_photo=%s text=%s", chat_id, chat_type, user_id, has_photo, text[:80])
     command, args = command_and_args(text)
-    if command == "/id":
-        send_message(chat_id, f"Chat ID: {chat_id}\nChat type: {chat_type}\nAllowed chat ID: {ALLOWED_CHAT_ID}", msg_id)
-        return
     if not is_allowed(message):
         logging.info("Ignored unauthorized chat_id=%s chat_type=%s allowed_chat_id=%s", chat_id, chat_type, ALLOWED_CHAT_ID)
         return
     state = user_state[user_id]
+    if state.get(REPORT_AWAITING_LANGUAGE) and command not in {"/tr", "/en", "/cancel", "/exitreport"}:
+        send_message(chat_id, "Şu an rapor modundasın, diğer komutlar çalışamaz. /cancel veya /exitreport kodlarını dene.", msg_id)
+        return
     if command in {"/tr", "/en"}:
         if state.get(REPORT_AWAITING_LANGUAGE):
             handle_report_language(message, "en" if command == "/en" else "tr")
@@ -517,9 +591,13 @@ def handle_message(message):
         state.pop(REPORT_DRAFT, None)
         handle_report_text(message, args)
     elif command == "/exitreport":
-        if state.get(REPORT_MODE):
+        if state.get(REPORT_MODE) or state.get(REPORT_AWAITING_LANGUAGE) or state.get(REPORT_PENDING_TEXT):
             state.pop(REPORT_MODE, None)
             state.pop(REPORT_DRAFT, None)
+            state.pop(REPORT_AWAITING_LANGUAGE, None)
+            state.pop(REPORT_PENDING_TEXT, None)
+            state.pop(REPORT_PENDING_ANALYSIS, None)
+            state.pop(REPORT_PENDING_IMAGE_NOTE, None)
             send_message(chat_id, "Rapor modundan çıkıldı.", msg_id)
         else:
             send_message(chat_id, "Aktif rapor modu yok.", msg_id)
@@ -530,6 +608,8 @@ def handle_message(message):
             send_message(chat_id, "Rapor modundasın. Çıkmak için /exitreport, tamamen iptal etmek için /cancel kullan.", msg_id)
         else:
             handle_report_text(message, text)
+    elif has_photo:
+        handle_chat(message, args or text)
 
 def poll_loop():
     offset = 0
