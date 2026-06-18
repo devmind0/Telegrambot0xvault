@@ -39,7 +39,7 @@ Rapor akisini kapatir.
 /cancel
 Aktif islemi iptal eder.
 
-Komutsuz mesajlar ve tum fotograflar yok sayilir.
+Komutsuz mesajlar yok sayilir. Fotograf gelirse bot fotograf goremedigini soyler.
 """.strip()
 
 
@@ -147,7 +147,7 @@ def quick_process(update):
         return {"ok": True}
 
     if has_photo:
-        return {"ok": True}
+        return webhook_method(chat_id, "Maalesef fotoğraf göremiyorum. Lütfen görseldeki hata veya içeriği metin olarak yaz.", msg_id)
 
     state = bot.user_state[user_id]
 

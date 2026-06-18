@@ -489,6 +489,10 @@ def handle_report_language(message, language):
 
 def handle_message(message):
     if message.get("photo"):
+        chat_id = message.get("chat", {}).get("id", 0)
+        msg_id = message.get("message_id")
+        if chat_id:
+            send_message(chat_id, "Maalesef fotoğraf göremiyorum. Lütfen görseldeki hata veya içeriği metin olarak yaz.", msg_id)
         return
     text = (message.get("text") or "").strip()
     if not text:
