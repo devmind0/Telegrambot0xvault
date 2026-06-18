@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import logging
 import os
 import sys
@@ -7,7 +8,7 @@ import urllib.request
 from threading import Thread
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 
 RAW_MAIN_URL = os.getenv(
     "BOT_MAIN_URL",
@@ -17,6 +18,13 @@ RAW_MAIN_URL = os.getenv(
 app = FastAPI()
 _bot_module = None
 _startup_error = ""
+
+
+def ascii_json(data):
+    return Response(
+        content=json.dumps(data, ensure_ascii=True, separators=(",", ":")),
+        media_type="application/json",
+    )
 
 
 def load_remote_main():
@@ -54,6 +62,19 @@ def command_and_args(text):
     return command, rest.strip()
 
 
+def looks_turkish(text):
+    lowered = (text or "").lower()
+    return any(ch in lowered for ch in "çğıöşü") or any(
+        word in lowered.split() for word in ["merhaba", "selam", "nedir", "nasıl", "nasil", "çöz", "coz", "hata"]
+    )
+
+
+def processing_message(text):
+    if looks_turkish(text):
+        return "İsteğini aldım, işliyorum. Sonuç birazdan gönderilecek."
+    return "I received your request and I am processing it. The result will be sent shortly."
+
+
 def webhook_method(chat_id, text, reply_to=None):
     payload = {
         "method": "sendMessage",
@@ -64,6 +85,26 @@ def webhook_method(chat_id, text, reply_to=None):
     if reply_to:
         payload["reply_to_message_id"] = reply_to
     return payload
+
+
+def capture_first_response(bot, call):
+    responses = []
+    original_send_message = bot.send_message
+
+    def capture_send_message(chat_id, text, reply_to=None):
+        text = (text or "Tamam.").strip() or "Tamam."
+        if len(text) > 3900:
+            text = text[:3890].rstrip() + "..."
+        responses.append(webhook_method(chat_id, text, reply_to))
+
+    bot.send_message = capture_send_message
+    try:
+        call()
+    finally:
+        bot.send_message = original_send_message
+    if responses:
+        return responses[0]
+    return {"ok": True}
 
 
 def quick_process(update):
@@ -98,41 +139,25 @@ def quick_process(update):
         return webhook_method(chat_id, "İptal edildi. Aktif işlem durduruldu.", msg_id)
 
     if command == "/exitreport":
-        if state.get(bot.REPORT_MODE) or state.get(bot.REPORT_AWAITING_LANGUAGE) or state.get(bot.REPORT_PENDING_TEXT):
-            state.pop(bot.REPORT_MODE, None)
-            state.pop(bot.REPORT_DRAFT, None)
-            state.pop(bot.REPORT_AWAITING_LANGUAGE, None)
-            state.pop(bot.REPORT_PENDING_TEXT, None)
-            state.pop(bot.REPORT_PENDING_ANALYSIS, None)
-            state.pop(bot.REPORT_PENDING_IMAGE_NOTE, None)
-            return webhook_method(chat_id, "Rapor modundan çıkıldı.", msg_id)
-        return webhook_method(chat_id, "Aktif rapor modu yok.", msg_id)
+        return capture_first_response(bot, lambda: bot.handle_message(message))
 
     if command == "/report" and not args:
         return webhook_method(chat_id, bot.REPORT_INTRO_TR, msg_id)
 
     if command == "/report" and args and not message.get("photo"):
-        allowed, retry = bot.allow_rate(user_id, "report", bot.REPORT_RATE_LIMIT_COUNT, bot.REPORT_RATE_LIMIT_WINDOW_SECONDS)
-        if not allowed:
-            return webhook_method(chat_id, f"Rapor üretim limiti aşıldı. {retry} saniye sonra tekrar dene.", msg_id)
-        analysis = bot.analyze_report(args.strip())
-        if not analysis["complete"]:
-            return webhook_method(chat_id, bot.missing_message(analysis["missing"]), msg_id)
-        state[bot.REPORT_PENDING_TEXT] = args.strip()
-        state[bot.REPORT_PENDING_ANALYSIS] = analysis
-        state[bot.REPORT_PENDING_IMAGE_NOTE] = ""
-        state[bot.REPORT_AWAITING_LANGUAGE] = True
-        return webhook_method(chat_id, bot.report_language_question(), msg_id)
+        return capture_first_response(bot, lambda: bot.handle_report_text(message, args))
 
     if command in {"/tr", "/en"}:
         if not state.get(bot.REPORT_AWAITING_LANGUAGE):
             return webhook_method(chat_id, "Bekleyen rapor yok. Önce /report <sorunu anlat> yaz.", msg_id)
-        Thread(target=bot.handle_report_language, args=(message, "en" if command == "/en" else "tr"), daemon=True).start()
-        return webhook_method(chat_id, "Rapor hazırlanıyor, birazdan gönderilecek.", msg_id)
+        return capture_first_response(bot, lambda: bot.handle_report_language(message, "en" if command == "/en" else "tr"))
+
+    if command == "/chat" and not message.get("photo"):
+        return capture_first_response(bot, lambda: bot.handle_chat(message, args))
 
     if command == "/chat" or message.get("photo") or command == "/report":
         Thread(target=bot.handle_message, args=(message,), daemon=True).start()
-        return webhook_method(chat_id, "İsteğini aldım, işliyorum. Sonuç birazdan gönderilecek.", msg_id)
+        return webhook_method(chat_id, processing_message(text), msg_id)
 
     return {"ok": True}
 
@@ -154,7 +179,7 @@ def root():
         version = getattr(_bot_module, "APP_VERSION", "unknown")
     return {
         "status": "ok" if not _startup_error else "error",
-        "mode": "telegram_webhook_fast_ack",
+        "mode": "telegram_webhook_ascii_sync",
         "service": "0xVault Telegram Bot",
         "version": version,
         "error": _startup_error,
@@ -170,7 +195,7 @@ def health():
 async def telegram_webhook(request: Request):
     try:
         update = await request.json()
-        return JSONResponse(quick_process(update))
+        return ascii_json(quick_process(update))
     except Exception as exc:
         logging.exception("telegram webhook failed")
-        return JSONResponse({"ok": True, "error": str(exc)})
+        return ascii_json({"ok": True, "error": str(exc)})
