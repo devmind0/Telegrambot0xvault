@@ -4,6 +4,8 @@ import logging
 import os
 import sys
 import tempfile
+import time
+import urllib.parse
 import urllib.request
 from threading import Thread
 
@@ -14,10 +16,52 @@ RAW_MAIN_URL = os.getenv(
     "BOT_MAIN_URL",
     "https://raw.githubusercontent.com/devmind0/Telegrambot0xvault/main/main.py",
 )
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 app = FastAPI()
 _bot_module = None
 _startup_error = ""
+
+ASCII_HELP = """
+0xVault Cyber Security Bot komutlari:
+
+/chat <mesaj>
+Siber guvenlik, bug bounty, guvenli kod ve savunma sorularina cevap verir.
+Fotograf yorumlatmak icin fotograf aciklamasina /chat <soru> yaz.
+
+/report <sorunu anlat>
+Bug bounty raporu icin bilgileri kontrol eder, sonra /tr veya /en dil secimi ister.
+Fotografi rapora eklemek icin fotograf aciklamasina /report <bulgu> yaz.
+
+/tr
+Bekleyen raporu Turkce hazirlar.
+
+/en
+Bekleyen raporu English hazirlar.
+
+/exitreport
+Rapor akisini kapatir.
+
+/cancel
+Aktif islemi iptal eder.
+
+Komutsuz mesaj ve komutsuz fotograf yok sayilir.
+""".strip()
+
+ASCII_REPORT_USAGE = """
+Kullanim: /report <sorunu anlat>
+
+Ornek:
+/report Acik turu: IDOR. Etkilenen URL: https://example.com/api/users/123/invoices. Nasil tetikleniyor: user_id 123 yerine 124 yapilip GET request gonderiliyor. Etki/Risk: Yetkisiz kullanici baska musterinin fatura verilerini gorebiliyor. Severity: High
+
+Zorunlu bilgiler:
+Acik turu
+Etkilenen URL veya endpoint
+Nasil tetikleniyor
+Etki/Risk
+Severity
+""".strip()
 
 
 def ascii_json(data):
@@ -43,11 +87,52 @@ def load_remote_main():
         sys.modules["oxvault_main"] = module
         spec.loader.exec_module(module)
         module.validate_config()
+        module.send_message = safe_send_message
         _bot_module = module
         logging.info("0xVault Telegram webhook app loaded version=%s", getattr(module, "APP_VERSION", "unknown"))
         return module
     except Exception as exc:
-        raise RuntimeError(f"main.py GitHub raw kaynağından yüklenemedi: {exc}") from exc
+        raise RuntimeError(f"main.py GitHub raw kaynagindan yuklenemedi: {exc}") from exc
+
+
+def telegram_form(method, payload, retries=3):
+    data = urllib.parse.urlencode(payload, doseq=True).encode("utf-8")
+    headers = {"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"}
+    request = urllib.request.Request(f"{TELEGRAM_API_BASE}/{method}", data=data, headers=headers, method="POST")
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                return json.loads(body)
+        except Exception as exc:
+            last_error = exc
+            logging.warning("Telegram form API error method=%s attempt=%s/%s error=%s", method, attempt, retries, exc)
+            time.sleep(min(6, attempt * 2))
+    logging.error("Telegram form API failed method=%s error=%s", method, last_error)
+    return {"ok": False, "error": str(last_error)}
+
+
+def safe_send_message(chat_id, text, reply_to=None):
+    text = (text or "Tamam.").strip() or "Tamam."
+    chunks = []
+    while len(text) > 3900:
+        split_at = text.rfind("\n", 0, 3900)
+        if split_at < 1500:
+            split_at = 3900
+        chunks.append(text[:split_at].strip())
+        text = text[split_at:].strip()
+    if text:
+        chunks.append(text)
+    for chunk in chunks:
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "disable_web_page_preview": "true",
+        }
+        if reply_to:
+            payload["reply_to_message_id"] = reply_to
+        telegram_form("sendMessage", payload, retries=3)
 
 
 def message_text(message):
@@ -62,24 +147,11 @@ def command_and_args(text):
     return command, rest.strip()
 
 
-def looks_turkish(text):
-    lowered = (text or "").lower()
-    return any(ch in lowered for ch in "çğıöşü") or any(
-        word in lowered.split() for word in ["merhaba", "selam", "nedir", "nasıl", "nasil", "çöz", "coz", "hata"]
-    )
-
-
-def processing_message(text):
-    if looks_turkish(text):
-        return "İsteğini aldım, işliyorum. Sonuç birazdan gönderilecek."
-    return "I received your request and I am processing it. The result will be sent shortly."
-
-
 def webhook_method(chat_id, text, reply_to=None):
     payload = {
         "method": "sendMessage",
         "chat_id": chat_id,
-        "text": (text or "Tamam.").strip() or "Tamam.",
+        "text": (text or "OK").strip() or "OK",
         "disable_web_page_preview": True,
     }
     if reply_to:
@@ -87,24 +159,24 @@ def webhook_method(chat_id, text, reply_to=None):
     return payload
 
 
-def capture_first_response(bot, call):
-    responses = []
-    original_send_message = bot.send_message
+def ack_text(command):
+    if command == "/chat":
+        return "Istek alindi, isleniyor. Sonuc birazdan gonderilecek."
+    if command == "/report":
+        return "Istek alindi, gorsel ve rapor bilgileri isleniyor."
+    return "Istek alindi."
 
-    def capture_send_message(chat_id, text, reply_to=None):
-        text = (text or "Tamam.").strip() or "Tamam."
-        if len(text) > 3900:
-            text = text[:3890].rstrip() + "..."
-        responses.append(webhook_method(chat_id, text, reply_to))
 
-    bot.send_message = capture_send_message
+def run_background(bot, message):
     try:
-        call()
-    finally:
-        bot.send_message = original_send_message
-    if responses:
-        return responses[0]
-    return {"ok": True}
+        bot.send_message = safe_send_message
+        bot.handle_message(message)
+    except Exception:
+        logging.exception("background bot handling failed")
+        chat_id = (message.get("chat") or {}).get("id")
+        msg_id = message.get("message_id")
+        if chat_id:
+            safe_send_message(chat_id, "Islem sirasinda hata olustu. Lutfen tekrar dene.", msg_id)
 
 
 def quick_process(update):
@@ -125,39 +197,51 @@ def quick_process(update):
     state = bot.user_state[user_id]
 
     if state.get(bot.REPORT_AWAITING_LANGUAGE) and command not in {"/tr", "/en", "/cancel", "/exitreport"}:
-        return webhook_method(
-            chat_id,
-            "Şu an rapor modundasın, diğer komutlar çalışamaz. /cancel veya /exitreport kodlarını dene.",
-            msg_id,
-        )
+        return webhook_method(chat_id, "Su an rapor modundasin. /tr, /en, /cancel veya /exitreport kullan.", msg_id)
 
     if command == "/help":
-        return webhook_method(chat_id, bot.HELP_TR, msg_id)
+        return webhook_method(chat_id, ASCII_HELP, msg_id)
 
     if command == "/cancel":
         bot.clear_user(user_id)
-        return webhook_method(chat_id, "İptal edildi. Aktif işlem durduruldu.", msg_id)
+        return webhook_method(chat_id, "Iptal edildi. Aktif islem durduruldu.", msg_id)
 
     if command == "/exitreport":
-        return capture_first_response(bot, lambda: bot.handle_message(message))
+        if state.get(bot.REPORT_AWAITING_LANGUAGE) or state.get(bot.REPORT_PENDING_TEXT) or state.get(bot.REPORT_MODE):
+            state.pop(bot.REPORT_MODE, None)
+            state.pop(bot.REPORT_DRAFT, None)
+            state.pop(bot.REPORT_AWAITING_LANGUAGE, None)
+            state.pop(bot.REPORT_PENDING_TEXT, None)
+            state.pop(bot.REPORT_PENDING_ANALYSIS, None)
+            state.pop(bot.REPORT_PENDING_IMAGE_NOTE, None)
+            return webhook_method(chat_id, "Rapor modundan cikildi.", msg_id)
+        return webhook_method(chat_id, "Aktif rapor modu yok.", msg_id)
 
     if command == "/report" and not args:
-        return webhook_method(chat_id, bot.REPORT_INTRO_TR, msg_id)
+        return webhook_method(chat_id, ASCII_REPORT_USAGE, msg_id)
 
     if command == "/report" and args and not message.get("photo"):
-        return capture_first_response(bot, lambda: bot.handle_report_text(message, args))
+        allowed, retry = bot.allow_rate(user_id, "report", bot.REPORT_RATE_LIMIT_COUNT, bot.REPORT_RATE_LIMIT_WINDOW_SECONDS)
+        if not allowed:
+            return webhook_method(chat_id, f"Rapor uretim limiti asildi. {retry} saniye sonra tekrar dene.", msg_id)
+        analysis = bot.analyze_report(args.strip())
+        if not analysis["complete"]:
+            return webhook_method(chat_id, bot.missing_message(analysis["missing"]), msg_id)
+        state[bot.REPORT_PENDING_TEXT] = args.strip()
+        state[bot.REPORT_PENDING_ANALYSIS] = analysis
+        state[bot.REPORT_PENDING_IMAGE_NOTE] = ""
+        state[bot.REPORT_AWAITING_LANGUAGE] = True
+        return webhook_method(chat_id, "Rapor dili sec: /tr Turkce veya /en English", msg_id)
 
     if command in {"/tr", "/en"}:
         if not state.get(bot.REPORT_AWAITING_LANGUAGE):
-            return webhook_method(chat_id, "Bekleyen rapor yok. Önce /report <sorunu anlat> yaz.", msg_id)
-        return capture_first_response(bot, lambda: bot.handle_report_language(message, "en" if command == "/en" else "tr"))
-
-    if command == "/chat" and not message.get("photo"):
-        return capture_first_response(bot, lambda: bot.handle_chat(message, args))
+            return webhook_method(chat_id, "Bekleyen rapor yok. Once /report <sorunu anlat> yaz.", msg_id)
+        Thread(target=run_background, args=(bot, message), daemon=True).start()
+        return webhook_method(chat_id, "Rapor hazirlaniyor. Sonuc birazdan gonderilecek.", msg_id)
 
     if command in {"/chat", "/report"}:
-        Thread(target=bot.handle_message, args=(message,), daemon=True).start()
-        return webhook_method(chat_id, processing_message(text), msg_id)
+        Thread(target=run_background, args=(bot, message), daemon=True).start()
+        return webhook_method(chat_id, ack_text(command), msg_id)
 
     return {"ok": True}
 
@@ -179,7 +263,7 @@ def root():
         version = getattr(_bot_module, "APP_VERSION", "unknown")
     return {
         "status": "ok" if not _startup_error else "error",
-        "mode": "telegram_webhook_command_gated_ascii", 
+        "mode": "telegram_webhook_ascii_ack_form_send",
         "service": "0xVault Telegram Bot",
         "version": version,
         "error": _startup_error,
