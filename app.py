@@ -18,6 +18,21 @@ app = FastAPI()
 _bot_module = None
 _startup_error = ""
 
+
+TR_ASCII_MAP = str.maketrans({
+    "ç": "c", "Ç": "C",
+    "ğ": "g", "Ğ": "G",
+    "ı": "i", "İ": "I",
+    "ö": "o", "Ö": "O",
+    "ş": "s", "Ş": "S",
+    "ü": "u", "Ü": "U",
+})
+
+
+def stable_text(text):
+    text = str(text or "OK")
+    return text.translate(TR_ASCII_MAP).replace("﻿", "").replace("​", "")
+
 ASCII_HELP = """
 0xVault Cyber Security Bot komutlari:
 
@@ -87,7 +102,7 @@ def command_and_args(text):
 
 
 def webhook_method(chat_id, text, reply_to=None):
-    text = (text or "OK").strip() or "OK"
+    text = stable_text(text).strip() or "OK"
     if len(text) > 3900:
         text = text[:3890].rstrip() + "..."
     payload = {
@@ -200,7 +215,7 @@ def root():
         version = getattr(_bot_module, "APP_VERSION", "unknown")
     return {
         "status": "ok" if not _startup_error else "error",
-        "mode": "telegram_webhook_photo_ascii_stable",
+        "mode": "telegram_webhook_all_ascii_stable",
         "service": "0xVault Telegram Bot",
         "version": version,
         "error": _startup_error,
