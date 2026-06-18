@@ -147,7 +147,7 @@ def quick_process(update):
         return {"ok": True}
 
     if has_photo:
-        return webhook_method(chat_id, "Maalesef fotoğraf göremiyorum. Lütfen görseldeki hata veya içeriği metin olarak yaz.", msg_id)
+        return webhook_method(chat_id, "Fotograf bakamiyorum. Lutfen gorseldeki hata veya icerigi metin olarak yaz.", msg_id)
 
     state = bot.user_state[user_id]
 
@@ -200,7 +200,7 @@ def root():
         version = getattr(_bot_module, "APP_VERSION", "unknown")
     return {
         "status": "ok" if not _startup_error else "error",
-        "mode": "telegram_webhook_text_only_stable",
+        "mode": "telegram_webhook_photo_ascii_stable",
         "service": "0xVault Telegram Bot",
         "version": version,
         "error": _startup_error,

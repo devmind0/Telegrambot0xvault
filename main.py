@@ -42,7 +42,7 @@ REPORT_DRAFT = "report_draft"
 REPORT_AWAITING_LANGUAGE = "report_awaiting_language"
 REPORT_PENDING_TEXT = "report_pending_text"
 REPORT_PENDING_ANALYSIS = "report_pending_analysis"
-APP_VERSION = "2026-06-18-no-photo-stable"
+APP_VERSION = "2026-06-18-photo-ascii-stable"
 LIMIT_MESSAGE = "bugünlük bukadar sonra tekrar dene (limit bitti)"
 REPORT_REVIEW_WARNING_TR = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
 REPORT_REVIEW_WARNING_EN = "*Do not trust the bot blindly; it can make mistakes. Review the final report yourself.*"
@@ -492,7 +492,7 @@ def handle_message(message):
         chat_id = message.get("chat", {}).get("id", 0)
         msg_id = message.get("message_id")
         if chat_id:
-            send_message(chat_id, "Maalesef fotoğraf göremiyorum. Lütfen görseldeki hata veya içeriği metin olarak yaz.", msg_id)
+            send_message(chat_id, "Fotograf bakamiyorum. Lutfen gorseldeki hata veya icerigi metin olarak yaz.", msg_id)
         return
     text = (message.get("text") or "").strip()
     if not text:
