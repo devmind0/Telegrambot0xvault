@@ -201,7 +201,8 @@ def telegram(method, payload=None, retries=3):
             wait_seconds = min(10, attempt * 2)
             logging.warning("Telegram API temporary error method=%s attempt=%s/%s error=%s", method, attempt, retries, exc)
             time.sleep(wait_seconds)
-    raise RuntimeError(f"Telegram API failed after retries: {last_error}")
+    logging.error("Telegram API failed after retries method=%s error=%s", method, last_error)
+    return {"ok": False, "result": [], "error": str(last_error)}
 
 def send_message(chat_id, text, reply_to=None):
     text = text.strip() or "Tamam."
