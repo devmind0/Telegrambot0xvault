@@ -144,22 +144,52 @@ def cancel_report_state(bot, state):
     state.pop(bot.REPORT_PENDING_ANALYSIS, None)
 
 
+def welcome_name(member):
+    username = (member.get("username") or "").strip()
+    if username:
+        return "@" + username
+    full_name = " ".join(part for part in [member.get("first_name", ""), member.get("last_name", "")] if part).strip()
+    return full_name or "dostum"
+
+
+def welcome_message(member):
+    name = welcome_name(member)
+    return (
+        f"Selam, hos geldin {name}.\n\n"
+        "0xVault grubuna katildin. Burası siber guvenlik, bug bounty, guvenli kod ve savunma odakli calisma alanidir. "
+        "Paylasimlarda kapsam, izin ve profesyonel etik kurallara dikkat edelim."
+    )
+
+
 def quick_process(update):
     bot = load_remote_main()
     message = update.get("message") if isinstance(update, dict) else None
     if not message:
         return {"ok": True}
 
-    text = message_text(message)
-    has_photo = bool(message.get("photo"))
     chat = message.get("chat", {})
     chat_id = chat.get("id", 0)
     msg_id = message.get("message_id")
-    user_id = message.get("from", {}).get("id", 0)
-    command, args = command_and_args(text)
 
     if not bot.is_allowed(message):
         return {"ok": True}
+
+    new_members = message.get("new_chat_members") or []
+    if new_members:
+        bot_id = None
+        try:
+            bot_id = int(str(bot.TELEGRAM_BOT_TOKEN).split(":", 1)[0])
+        except Exception:
+            bot_id = None
+        real_members = [member for member in new_members if not member.get("is_bot") or member.get("id") != bot_id]
+        if real_members:
+            return webhook_method(chat_id, welcome_message(real_members[0]), msg_id)
+        return {"ok": True}
+
+    text = message_text(message)
+    has_photo = bool(message.get("photo"))
+    user_id = message.get("from", {}).get("id", 0)
+    command, args = command_and_args(text)
 
     if has_photo:
         return webhook_method(chat_id, "Fotograf bakamiyorum. Lutfen gorseldeki hata veya icerigi metin olarak yaz.", msg_id)
