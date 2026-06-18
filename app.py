@@ -39,10 +39,8 @@ Rapor akisini kapatir.
 /cancel
 Aktif islemi iptal eder.
 
-Komutsuz mesaj ve komutsuz fotograf yok sayilir.
+Komutsuz mesajlar ve tum fotograflar yok sayilir.
 """.strip()
-
-PHOTO_LIMIT_TEXT = "Fotograf geldi fakat bu host Telegram dosyasini indirirken cok gecikiyor. Takilmamasi icin gorsel analizi kapatildi. Lutfen ekrandaki hata metnini /chat veya /report ile yaz."
 
 
 def ascii_json(data):
@@ -129,7 +127,6 @@ def cancel_report_state(bot, state):
     state.pop(bot.REPORT_AWAITING_LANGUAGE, None)
     state.pop(bot.REPORT_PENDING_TEXT, None)
     state.pop(bot.REPORT_PENDING_ANALYSIS, None)
-    state.pop(bot.REPORT_PENDING_IMAGE_NOTE, None)
 
 
 def quick_process(update):
@@ -150,8 +147,6 @@ def quick_process(update):
         return {"ok": True}
 
     if has_photo:
-        if command in {"/chat", "/report"}:
-            return webhook_method(chat_id, PHOTO_LIMIT_TEXT, msg_id)
         return {"ok": True}
 
     state = bot.user_state[user_id]
@@ -205,7 +200,7 @@ def root():
         version = getattr(_bot_module, "APP_VERSION", "unknown")
     return {
         "status": "ok" if not _startup_error else "error",
-        "mode": "telegram_webhook_sync_no_background",
+        "mode": "telegram_webhook_text_only_stable",
         "service": "0xVault Telegram Bot",
         "version": version,
         "error": _startup_error,
