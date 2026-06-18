@@ -39,9 +39,13 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 REPORT_MODE = "report_mode"
 REPORT_DRAFT = "report_draft"
-APP_VERSION = "2026-06-17-report-inline-retry"
+REPORT_AWAITING_LANGUAGE = "report_awaiting_language"
+REPORT_PENDING_TEXT = "report_pending_text"
+REPORT_PENDING_ANALYSIS = "report_pending_analysis"
+APP_VERSION = "2026-06-18-report-language-choice"
 LIMIT_MESSAGE = "bugünlük bukadar sonra tekrar dene (limit bitti)"
-REPORT_REVIEW_WARNING = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
+REPORT_REVIEW_WARNING_TR = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
+REPORT_REVIEW_WARNING_EN = "*Do not trust the bot blindly; it can make mistakes. Review the final report yourself.*"
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
 
@@ -100,8 +104,10 @@ Etki/Risk:
 Kanıt/PoC:
 Önerilen Çözüm:
 Doğrulama Notları:
-En sonda ayrı bir satır olarak şu uyarıyı birebir ekle:
+Kullanıcı Türkçe rapor isterse en sonda ayrı bir satır olarak şu uyarıyı birebir ekle:
 *Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*
+Kullanıcı İngilizce rapor isterse en sonda ayrı bir satır olarak şu uyarıyı birebir ekle:
+*Do not trust the bot blindly; it can make mistakes. Review the final report yourself.*
 """.strip()
 
 HELP_TR = """
@@ -111,7 +117,7 @@ HELP_TR = """
 Siber güvenlik, bug bounty, güvenli kod ve savunma odaklı sorulara cevap verir.
 
 /report <sorunu anlat>
-Bug bounty raporu üretir. Zorunlu bilgiler: Açık türü, etkilenen URL veya endpoint, nasıl tetiklendiği, etki/risk ve severity.
+Bug bounty raporu için önce zorunlu bilgileri kontrol eder, sonra Türkçe veya İngilizce dil seçimi sorar.
 
 /exitreport
 Sadece rapor modundan çıkar.
@@ -303,10 +309,34 @@ def analyze_report(text):
 def missing_message(missing):
     return "Raporun eksik bilgileri var: " + ", ".join(missing) + ". Lütfen tamamla."
 
-def fallback_report(text, analysis):
-    vuln = analysis.get("type") or "Belirtilen açık"
-    severity = analysis.get("severity") or "Belirtilmedi"
-    target = analysis.get("target") or "Belirtilmedi"
+
+def report_language_question():
+    return "Raporu hangi dilde hazırlayayım?\n\n/tr Türkçe\n/en English"
+
+
+def warning_for_language(language):
+    return REPORT_REVIEW_WARNING_EN if language == "en" else REPORT_REVIEW_WARNING_TR
+
+
+def fallback_report(text, analysis, language="tr"):
+    vuln = analysis.get("type") or ("Specified vulnerability" if language == "en" else "Belirtilen açık")
+    severity = analysis.get("severity") or ("Not specified" if language == "en" else "Belirtilmedi")
+    target = analysis.get("target") or ("Not specified" if language == "en" else "Belirtilmedi")
+    if language == "en":
+        return (
+            f"Title: {vuln} on {target}\n\n"
+            f"Description: A {vuln} security issue was identified on the affected asset during the 0xVault review. The finding should be evaluated only within an authorized bug bounty or responsible disclosure scope.\n\n"
+            f"Severity: {severity}\n\n"
+            f"Affected URL/Endpoint: {target}\n\n"
+            f"Vulnerability Type: {vuln}\n\n"
+            f"Technical Details: {text.strip()}\n\n"
+            f"Reproduction Steps: The trigger flow and PoC details provided by the user are preserved in the technical details section and should be revalidated in an authorized test environment.\n\n"
+            f"Impact/Risk: Depending on the confirmed scenario, this issue may allow unauthorized access, data exposure, or bypass of intended security controls.\n\n"
+            f"Evidence/PoC: {text.strip()}\n\n"
+            f"Recommended Fix: Enforce proper input validation, authorization checks, secure defaults, logging, and regression tests. Revalidate both positive and negative cases after the fix.\n\n"
+            f"Verification Notes: After remediation, test authorized and unauthorized user scenarios separately on the affected endpoint.\n\n"
+            f"{REPORT_REVIEW_WARNING_EN}"
+        )
     return (
         f"Title: {target} üzerinde {vuln}\n\n"
         f"Açıklama: 0xVault incelemesi kapsamında hedefte {vuln} türünde bir güvenlik zafiyeti tespit edildi. Bulgular yetkili bug bounty veya sorumlu açıklama kapsamı içinde değerlendirilmelidir.\n\n"
@@ -319,15 +349,16 @@ def fallback_report(text, analysis):
         f"Kanıt/PoC: {text.strip()}\n\n"
         f"Önerilen Çözüm: Girdi doğrulama, yetkilendirme kontrolleri, güvenli varsayılanlar, kapsamlı loglama ve regresyon testleri uygulanmalıdır.\n\n"
         f"Doğrulama Notları: Düzeltme sonrası aynı endpoint üzerinde yetkili ve yetkisiz kullanıcı senaryoları ayrı ayrı test edilmelidir.\n\n"
-        f"{REPORT_REVIEW_WARNING}"
+        f"{REPORT_REVIEW_WARNING_TR}"
     )
 
 
-def ensure_report_warning(report):
+def ensure_report_warning(report, language="tr"):
     report = report.strip()
-    if REPORT_REVIEW_WARNING in report:
+    warning = warning_for_language(language)
+    if warning in report:
         return report
-    return report + "\n\n" + REPORT_REVIEW_WARNING
+    return report + "\n\n" + warning
 
 
 def generate_ai(system_prompt, user_prompt, temperature=0.35):
@@ -404,14 +435,30 @@ def handle_report_text(message, text):
         send_message(chat_id, f"Rapor üretim limiti aşıldı. {retry} saniye sonra tekrar dene.", msg_id)
         return
     state = user_state[user_id]
-    previous = state.get(REPORT_DRAFT, "")
-    combined = (previous + "\n" + text).strip() if previous else text.strip()
-    state[REPORT_DRAFT] = combined
+    combined = text.strip()
     analysis = analyze_report(combined)
     if not analysis["complete"]:
         send_message(chat_id, missing_message(analysis["missing"]), msg_id)
         return
+    state[REPORT_PENDING_TEXT] = combined
+    state[REPORT_PENDING_ANALYSIS] = analysis
+    state[REPORT_AWAITING_LANGUAGE] = True
+    send_message(chat_id, report_language_question(), msg_id)
+
+
+def handle_report_language(message, language):
+    chat_id = message["chat"]["id"]
+    msg_id = message.get("message_id")
+    user_id = message.get("from", {}).get("id", 0)
+    state = user_state[user_id]
+    combined = state.get(REPORT_PENDING_TEXT, "")
+    analysis = state.get(REPORT_PENDING_ANALYSIS)
+    if not combined or not analysis:
+        send_message(chat_id, "Bekleyen rapor yok. Önce /report <sorunu anlat> yaz.", msg_id)
+        return
+    language_name = "English" if language == "en" else "Türkçe"
     prompt = (
+        f"Rapor dili kesinlikle {language_name} olacak. "
         "Aşağıdaki bulguyu bug bounty raporuna dönüştür. Bilgileri uydurma, belirsiz yerlerde kontrollü ifade kullan.\n\n"
         f"Tespit edilen açık türü: {analysis['type']}\n"
         f"Tespit edilen hedef: {analysis['target']}\n"
@@ -425,10 +472,13 @@ def handle_report_text(message, text):
         return
     except Exception as exc:
         logging.warning("AI report error: %s", exc)
-        report = fallback_report(combined, analysis)
-    report = ensure_report_warning(report)
+        report = fallback_report(combined, analysis, language)
+    report = ensure_report_warning(report, language)
     state.pop(REPORT_MODE, None)
     state.pop(REPORT_DRAFT, None)
+    state.pop(REPORT_AWAITING_LANGUAGE, None)
+    state.pop(REPORT_PENDING_TEXT, None)
+    state.pop(REPORT_PENDING_ANALYSIS, None)
     send_message(chat_id, report, msg_id)
 
 def handle_message(message):
@@ -449,7 +499,12 @@ def handle_message(message):
         logging.info("Ignored unauthorized chat_id=%s chat_type=%s allowed_chat_id=%s", chat_id, chat_type, ALLOWED_CHAT_ID)
         return
     state = user_state[user_id]
-    if command == "/help":
+    if command in {"/tr", "/en"}:
+        if state.get(REPORT_AWAITING_LANGUAGE):
+            handle_report_language(message, "en" if command == "/en" else "tr")
+        else:
+            send_message(chat_id, "Bekleyen rapor yok. Önce /report <sorunu anlat> yaz.", msg_id)
+    elif command == "/help":
         send_message(chat_id, HELP_TR, msg_id)
     elif command == "/cancel":
         clear_user(user_id)
@@ -479,13 +534,21 @@ def handle_message(message):
 def poll_loop():
     offset = 0
     try:
-        telegram("deleteWebhook", {"drop_pending_updates": True}, retries=2)
+        delete_payload = dict(drop_pending_updates=True)
+        telegram("deleteWebhook", delete_payload, retries=2)
     except Exception as exc:
         logging.warning("deleteWebhook failed, continuing polling loop without crashing: %s", exc)
+
     logging.info("0xVault bot started version=%s", APP_VERSION)
+
     while True:
         try:
-            data = telegram("getUpdates", {"offset": offset, "timeout": 50, "allowed_updates": ["message"]})
+            payload = {
+                "offset": offset,
+                "timeout": 50,
+                "allowed_updates": ["message"],
+            }
+            data = telegram("getUpdates", payload, retries=3)
             for update in data.get("result", []):
                 offset = max(offset, update.get("update_id", 0) + 1)
                 message = update.get("message")
