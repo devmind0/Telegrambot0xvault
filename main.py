@@ -42,7 +42,7 @@ REPORT_DRAFT = "report_draft"
 REPORT_AWAITING_LANGUAGE = "report_awaiting_language"
 REPORT_PENDING_TEXT = "report_pending_text"
 REPORT_PENDING_ANALYSIS = "report_pending_analysis"
-APP_VERSION = "2026-06-18-all-ascii-stable"
+APP_VERSION = "2026-06-18-photo-gated-localized-report"
 LIMIT_MESSAGE = "bugünlük bukadar sonra tekrar dene (limit bitti)"
 REPORT_REVIEW_WARNING_TR = "*Bota güvenmeyin, hata yapabilir; en sonda siz gözden geçirin.*"
 REPORT_REVIEW_WARNING_EN = "*Do not trust the bot blindly; it can make mistakes. Review the final report yourself.*"
@@ -315,8 +315,18 @@ def missing_message(missing):
     return "Raporun eksik bilgileri var: " + ", ".join(missing) + ". Lütfen tamamla."
 
 
-def report_language_question():
-    return "Raporu hangi dilde hazırlayayım?\n\n/tr Türkçe\n/en English"
+def looks_turkish_text(text):
+    lowered = (text or "").lower()
+    if any(ch in lowered for ch in "çğıöşü"):
+        return True
+    words = set(re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ]+", lowered))
+    return bool(words & {"merhaba", "selam", "acik", "açık", "etkilenen", "nasil", "nasıl", "tetikleniyor", "yetkisiz", "veri", "risk", "kritik", "yuksek", "yüksek"})
+
+
+def report_language_question(text=""):
+    if looks_turkish_text(text):
+        return "Raporu hangi dilde hazirlayayim?\n\n/tr Turkce\n/en English"
+    return "Which language should I prepare the report in?\n\n/tr Turkish\n/en English"
 
 
 def warning_for_language(language):
@@ -449,7 +459,7 @@ def handle_report_text(message, text):
     state[REPORT_PENDING_TEXT] = combined
     state[REPORT_PENDING_ANALYSIS] = analysis
     state[REPORT_AWAITING_LANGUAGE] = True
-    send_message(chat_id, report_language_question(), msg_id)
+    send_message(chat_id, report_language_question(combined), msg_id)
 
 
 def handle_report_language(message, language):
@@ -488,13 +498,15 @@ def handle_report_language(message, language):
     send_message(chat_id, report, msg_id)
 
 def handle_message(message):
+    text = (message.get("text") or message.get("caption") or "").strip()
+    command, args = command_and_args(text)
     if message.get("photo"):
-        chat_id = message.get("chat", {}).get("id", 0)
-        msg_id = message.get("message_id")
-        if chat_id:
-            send_message(chat_id, "Fotograf bakamiyorum. Lutfen gorseldeki hata veya icerigi metin olarak yaz.", msg_id)
+        if command in {"/chat", "/report"}:
+            chat_id = message.get("chat", {}).get("id", 0)
+            msg_id = message.get("message_id")
+            if chat_id:
+                send_message(chat_id, "Fotograf bakamiyorum. Lutfen gorseldeki hata veya icerigi metin olarak yaz.", msg_id)
         return
-    text = (message.get("text") or "").strip()
     if not text:
         return
     chat = message.get("chat", {})
@@ -503,7 +515,6 @@ def handle_message(message):
     msg_id = message.get("message_id")
     user_id = message.get("from", {}).get("id", 0)
     logging.info("Incoming message chat_id=%s chat_type=%s user_id=%s text=%s", chat_id, chat_type, user_id, text[:80])
-    command, args = command_and_args(text)
     if not is_allowed(message):
         logging.info("Ignored unauthorized chat_id=%s chat_type=%s allowed_chat_id=%s", chat_id, chat_type, ALLOWED_CHAT_ID)
         return

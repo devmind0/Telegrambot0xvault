@@ -54,7 +54,7 @@ Rapor akisini kapatir.
 /cancel
 Aktif islemi iptal eder.
 
-Komutsuz mesajlar yok sayilir. Fotograf gelirse bot fotograf goremedigini soyler.
+Komutsuz mesajlar ve komutsuz fotograflar yok sayilir. Fotograf icin /chat veya /report kullanilsa bile bot fotograf goremez; icerigi metin olarak yazman gerekir.
 """.strip()
 
 
@@ -192,7 +192,9 @@ def quick_process(update):
     command, args = command_and_args(text)
 
     if has_photo:
-        return webhook_method(chat_id, "Fotograf bakamiyorum. Lutfen gorseldeki hata veya icerigi metin olarak yaz.", msg_id)
+        if command in {"/chat", "/report"}:
+            return webhook_method(chat_id, "Fotograf bakamiyorum. Lutfen gorseldeki hata veya icerigi metin olarak yaz.", msg_id)
+        return {"ok": True}
 
     state = bot.user_state[user_id]
 
@@ -245,7 +247,7 @@ def root():
         version = getattr(_bot_module, "APP_VERSION", "unknown")
     return {
         "status": "ok" if not _startup_error else "error",
-        "mode": "telegram_webhook_all_ascii_stable",
+        "mode": "telegram_webhook_photo_gated_localized_report",
         "service": "0xVault Telegram Bot",
         "version": version,
         "error": _startup_error,
